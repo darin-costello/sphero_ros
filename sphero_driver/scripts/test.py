@@ -2,20 +2,26 @@
 import bluetooth
 import struct
 import time
-from sphero_driver import sphero_driver
 import sys
-sphero = sphero_driver.Sphero()
+from sphero_driver import Sphero
+sphero = Sphero()
 sphero.connect()
 sphero.set_raw_data_strm(40, 1 , 0, False)
 
 sphero.start()
-time.sleep(2)
-sphero.set_rgb_led(255,0,0,0,False)
-time.sleep(1)
-sphero.set_rgb_led(0,255,0,0,False)
-time.sleep(1)
-sphero.set_rgb_led(0,0,255,0,False)
-time.sleep(3)
+for i in xrange(0, 200):
+    for x in xrange(0, 255):
+        time.sleep(0.01)
+        sphero.set_rgb_led(255-x,x,0,0,False)
+
+    for x in xrange(0, 255):
+        time.sleep(0.01)
+        sphero.set_rgb_led(0,255-x,x,0,False)
+
+    for x in xrange(0, 255):
+        time.sleep(0.01)
+        sphero.set_rgb_led(x,0,255-x,0,False)
+
 sphero.join()
 sphero.disconnect()
 sys.exit(1)

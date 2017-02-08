@@ -93,10 +93,10 @@ class SpheroNode(object):
         self.power_state = 0
 
     def _init_pubsub(self):
-        self.odom_pub = rospy.Publisher('odom', Odometry)
-        self.imu_pub = rospy.Publisher('imu', Imu)
-        self.collision_pub = rospy.Publisher('collision', SpheroCollision)
-        self.diag_pub = rospy.Publisher('/diagnostics', DiagnosticArray)
+        self.odom_pub = rospy.Publisher('odom', Odometry, queue_size=1)
+        self.imu_pub = rospy.Publisher('imu', Imu, queue_size=1)
+        self.collision_pub = rospy.Publisher('collision', SpheroCollision, queue_size=1)
+        self.diag_pub = rospy.Publisher('/diagnostics', DiagnosticArray, queue_size=1)
         self.cmd_vel_sub = rospy.Subscriber('cmd_vel', Twist, self.cmd_vel, queue_size = 1)
         self.color_sub = rospy.Subscriber('set_color', ColorRGBA, self.set_color, queue_size = 1)
         self.back_led_sub = rospy.Subscriber('set_back_led', Float32, self.set_back_led, queue_size = 1)
@@ -114,7 +114,7 @@ class SpheroNode(object):
         self.diag_update_rate = rospy.Duration(rospy.get_param('~diag_update_rate', 1.0))
 
     def normalize_angle_positive(self, angle):
-        return math.fmod(math.fmod(angle, 2.0*math.pi) + 2.0*math.pi, 2.0*math.pi);
+        return math.fmod(math.fmod(angle, 2.0*math.pi) + 2.0*math.pi, 2.0*math.pi)
 
     def start(self):
         try:

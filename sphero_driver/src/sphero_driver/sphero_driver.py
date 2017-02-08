@@ -233,7 +233,6 @@ class Sphero(threading.Thread):
     self.stream_mask1 = None
     self.stream_mask2 = None
     self.seq = 0
-    self.raw_data_buf = []
     self._communication_lock = threading.Lock()
     self._async_callback_dict = dict()
     self._sync_callback_dict = dict()
@@ -756,6 +755,9 @@ class Sphero(threading.Thread):
     # this is larger than any single packet
     self.recv(1024)
 
+  def _calc_checksum(self, array):
+    return (sum([ord(x) for x in array]) % 256) ^ 0xff
+
   def recv(self, num_bytes):
     '''
     Commands are acknowledged from the Sphero -> Client in the
@@ -800,42 +802,63 @@ class Sphero(threading.Thread):
       complement)
 
     '''
-
     while self.is_connected and not self.shutdown:
-      with self._communication_lock:
-        self.raw_data_buf += self.bt.recv(num_bytes)
-      data = self.raw_data_buf
-      while len(data)>5:
-        if data[:2] == RECV['SYNC']:
-          #print "got response packet"
-          # response packet
-          data_length = ord(data[4])
-          if data_length+5 <= len(data):
-            data_packet = data[:(5+data_length)]
-            data = data[(5+data_length):]
-          else:
-            break
-            #print "Response packet", self.data2hexstr(data_packet)
-         
-        elif data[:2] == RECV['ASYNC']:
-          data_length = (ord(data[3])<<8)+ord(data[4])
-          if data_length+5 <= len(data):
-            data_packet = data[:(5+data_length)]
-            data = data[(5+data_length):]
-          else:
-            # the remainder of the packet isn't long enough
-            break
-          if data_packet[2]==IDCODE['DATA_STRM'] and self._async_callback_dict.has_key(IDCODE['DATA_STRM']):
-            self._async_callback_dict[IDCODE['DATA_STRM']](self.parse_data_strm(data_packet, data_length))
-          elif data_packet[2]==IDCODE['COLLISION'] and self._async_callback_dict.has_key(IDCODE['COLLISION']):
-            self._async_callback_dict[IDCODE['COLLISION']](self.parse_collision_detect(data_packet, data_length))
-          elif data_packet[2]==IDCODE['PWR_NOTIFY'] and self._async_callback_dict.has_key(IDCODE['PWR_NOTIFY']):
-            self._async_callback_dict[IDCODE['PWR_NOTIFY']](self.parse_pwr_notify(data_packet, data_length))
-          else:
-            print "got a packet that isn't streaming: " + self.data2hexstr(data)
+      #state one
+      packet = ['/x00']
+      while packet[0] != '\xff':
+        packet = self.bt.recv(1)
+        pass
+      
+      #state two
+      packet += self.bt.recv(1)[0]
+      packet_type = packet[1]
+      if packet_type == '\xff': # Sync Packet
+        packet += self.bt.recv(1) + self.bt.recv(1)
+        MSRP = packet[2]
+        SEQ = packet[3]
+        packet += self.bt.recv(1)
+        data_length = ord(packet[4])
+        while data_length > 0:
+          read = self.bt.recv(data_length)
+          data_length -= len(read)
+          packet += read
+        
+        checkSum = self._calc_checksum(packet[2:-1])
+        if checkSum != ord(packet[-1]):
+           print("Calculated checksum %02x doesn't match %02x" 
+              % (checkSum, ord(packet[-1])))
+
+      elif packet_type == '\xfe':
+        packet += self.bt.recv(1)
+        MRSP = packet[2]
+        packet += self.bt.recv(1) + self.bt.recv(1)
+        
+        data_length = (ord(packet[3])<<8) + ord(packet[4])
+        counter = data_length
+        while counter > 0:
+          read = self.bt.recv(counter)
+          counter -=len(read)
+          packet += read
+          
+        checkSum = self._calc_checksum(packet[2:-1])
+
+        if checkSum != ord(packet[-1]):
+          print("Calculated checksum %02x doesn't match %02x" 
+              % (checkSum, ord(packet[-1])))
         else:
-          raise RuntimeError("Bad SOF : " + self.data2hexstr(data))
-      self.raw_data_buf=data
+          packet = packet[5:]
+          if MRSP==IDCODE['DATA_STRM'] and self._async_callback_dict.has_key(IDCODE['DATA_STRM']):
+            output =  self.parse_data_strm(packet, data_length)
+            self._async_callback_dict[IDCODE['DATA_STRM']](output)
+          elif MRSP==IDCODE['COLLISION'] and self._async_callback_dict.has_key(IDCODE['COLLISION']):
+            self._async_callback_dict[IDCODE['COLLISION']](
+                self.parse_collision_detect(packet, data_length))
+          elif MRSP==IDCODE['PWR_NOTIFY'] and self._async_callback_dict.has_key(IDCODE['PWR_NOTIFY']):
+            self._async_callback_dict[IDCODE['PWR_NOTIFY']](
+                self.parse_pwr_notify(packet, data_length))
+          else:
+            print "got a packet that isn't streaming: " + self.data2hexstr(packet)
+    
 
   def parse_pwr_notify(self, data, data_length):
     '''
@@ -852,7 +875,7 @@ class Sphero(threading.Thread):
       * 03h = Battery Low, 
       * 04h = Battery Critical
     '''
-    return struct.unpack_from('B', ''.join(data[5:]))[0]
+    return struct.unpack_from('B', ''.join(data))[0]
 
   def parse_collision_detect(self, data, data_length):
     '''
@@ -881,13 +904,14 @@ class Sphero(threading.Thread):
     '''
     output={}
     
-    output['X'], output['Y'], output['Z'], output['Axis'], output['xMagnitude'], output['yMagnitude'], output['Speed'], output['Timestamp'] = struct.unpack_from('>hhhbhhbI', ''.join(data[5:]))
+    (output['X'], output['Y'], output['Z'], output['Axis'], output['xMagnitude'], output['yMagnitude'], 
+      output['Speed'], output['Timestamp']) = struct.unpack_from('>hhhbhhbI', ''.join(data))
     return output
 
   def parse_data_strm(self, data, data_length):
     output={}
     for i in range((data_length-1)/2):
-      unpack = struct.unpack_from('>h', ''.join(data[5+2*i:]))
+      unpack = struct.unpack_from('>h', ''.join(data[2*i:]))
       output[self.mask_list[i]] = unpack[0]
     #print self.mask_list
     #print output
